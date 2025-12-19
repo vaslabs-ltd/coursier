@@ -38,48 +38,34 @@ import coursier.core.VariantPublication
         if (constraints) variant.dependencyConstraints
         else variant.dependencies
       deps.map { dep =>
-        val versionMap = {
-          var map = dep.version
-          if (map.contains("strictly") && map.contains("requires"))
-            map = map - "requires"
-          if (map.contains("strictly") && map.contains("reject"))
-            map = map - "reject"
-          if (map.contains("prefers") && map.contains("reject"))
-            map = map - "reject"
-          map
+        val versionOpt = dep.version
+
+        val prefersOpt = versionOpt.flatMap(_.prefers).flatMap { v =>
+          val c = VersionConstraint(v)
+          if (c.preferred.isEmpty) None
+          else Some(c)
+        }
+
+        val base = versionOpt match {
+          case None => VersionConstraint.empty
+          case Some(v) =>
+            // Strictly takes precedence over requires
+            v.strictly.getOrElse(v.requires) match {
+              case None => VersionConstraint.empty
+              case Some(ver: String) => VersionConstraint(ver)
+            }
         }
 
         val finalVersion = {
-          val prefersOpt = versionMap.get("prefers").flatMap { v =>
-            val c = VersionConstraint(v)
-            if (c.preferred.isEmpty) None
-            else Some(c)
-          }
           prefersOpt match {
-            case Some(prefers) if versionMap.size == 1 =>
-              prefers
-            case _ =>
-              val versionMap0 =
-                if (prefersOpt.isEmpty) versionMap
-                else versionMap - "prefers"
-              val version = versionMap0.toSeq match {
-                case Seq(("requires" | "strictly", req)) => VersionConstraint(req)
-                case Seq()                               => VersionConstraint.empty
-                case _ =>
-                  val mainDep =
-                    s"${actualComponent.group}:${actualComponent.module}:${actualComponent.version}"
-                  val subDep = s"${dep.group}:${dep.module}"
-                  sys.error(
-                    s"Unrecognized dependency version shape for $subDep in $mainDep: $versionMap0"
-                  )
+            // If there's a 'prefers' version, merge it with the base constraint
+            case Some(prefers) =>
+              VersionConstraint.merge(base, prefers).getOrElse {
+                sys.error(
+                  s"Invalid version specification for ${dep.group}:${dep.module} in ${actualComponent.group}:${actualComponent.module}:${actualComponent.version}"
+                )
               }
-              prefersOpt match {
-                case Some(prefers) =>
-                  VersionConstraint.merge(version, prefers).getOrElse {
-                    sys.error(s"Invalid version specification: $versionMap0")
-                  }
-                case None => version
-              }
+            case None => base
           }
         }
 
@@ -258,9 +244,16 @@ object GradleModule {
   @data class ModuleDependency(
     group: String,
     module: String,
-    version: Map[String, String],
+    version: Option[ModuleDependencyVersion],
     attributes: Map[String, StringOrInt],
     endorseStrictVersions: Option[Boolean]
+  )
+
+  @data class ModuleDependencyVersion(
+    requires: Option[String] = None,
+    strictly: Option[String] = None,
+    prefers: Option[String] = None,
+    rejects: Option[Seq[String]] = None
   )
 
   @data class ModuleFile(

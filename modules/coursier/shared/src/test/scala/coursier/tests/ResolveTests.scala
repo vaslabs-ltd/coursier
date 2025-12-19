@@ -2176,6 +2176,11 @@ object ResolveTests extends TestSuite {
             )
           }
         }
+        test("gradle module version object"){
+          gradleModuleCheck(
+            dep"com.airbnb.android:lottie-compose:6.6.6"
+          )
+        }
       }
       test("fallback from config") {
         test("android") {
